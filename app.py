@@ -1,13 +1,18 @@
 import os
+from contextlib import contextmanager
+from urllib.parse import quote_plus
+
+from dotenv import load_dotenv
 from flask import Flask, request
 from flask_socketio import SocketIO, emit, join_room
 from flask_cors import CORS
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from datetime import datetime
-from contextlib import contextmanager
 
 app = Flask(__name__)
+
+# Cargar variables desde .env si existe
+load_dotenv()
 
 # Configuración desde variables de entorno
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "super-secret-key-change-me-in-production")
@@ -17,7 +22,19 @@ HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", 5000))
 SSL_CERT = os.getenv("SSL_CERT_FILE", "")
 SSL_KEY = os.getenv("SSL_KEY_FILE", "")
+
+# Soporta DATABASE_URL directo o los mismos DB_* que usa la API
+DB_HOST = os.getenv("DB_HOST", "")
+DB_PORT = int(os.getenv("DB_PORT", "5432") or "5432")
+DB_USER = os.getenv("DB_USER", "")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "")
+DB_NAME = os.getenv("DB_NAME", "")
+
 DATABASE_URL = os.getenv("DATABASE_URL", "")
+if not DATABASE_URL and DB_HOST and DB_USER and DB_NAME:
+    password = quote_plus(DB_PASSWORD) if DB_PASSWORD else ""
+    auth = f"{DB_USER}:{password}" if DB_PASSWORD else DB_USER
+    DATABASE_URL = f"postgresql://{auth}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
 # CORS para REST endpoints
 CORS(app, origins=CORS_ORIGINS if CORS_ORIGINS != "*" else "*", supports_credentials=True)

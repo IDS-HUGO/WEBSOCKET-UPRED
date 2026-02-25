@@ -78,6 +78,16 @@ PORT=5000
 HOST=0.0.0.0
 SSL_CERT_FILE=
 SSL_KEY_FILE=
+
+# Base de datos (opcion A: URL directa)
+DATABASE_URL=postgresql://postgres:tu_password_aqui@localhost:5432/upred_db
+
+# Base de datos (opcion B: mismos DB_* que la API)
+DB_HOST=localhost
+DB_PORT=5432
+DB_USER=postgres
+DB_PASSWORD=tu_password_aqui
+DB_NAME=upred_db
 ```
 
 ### Para PRODUCCIÓN:
@@ -90,6 +100,14 @@ PORT=5000
 HOST=0.0.0.0
 SSL_CERT_FILE=
 SSL_KEY_FILE=
+
+DATABASE_URL=postgresql://postgres:tu_password_aqui@localhost:5432/upred_db
+
+DB_HOST=localhost
+DB_PORT=5432
+DB_USER=postgres
+DB_PASSWORD=tu_password_aqui
+DB_NAME=upred_db
 ```
 
 > ⚠️ **Importante**: Genera un `SECRET_KEY` aleatorio con:
@@ -107,8 +125,8 @@ pip install -r requirements.txt
 ## 5) Crear base de datos PostgreSQL
 
 ```bash
-createdb red_social_uni
-psql -d red_social_uni -f database_schema.sql
+createdb upred_db
+psql -d upred_db -f database_schema.sql
 ```
 
 ## 6) Ejecutar servidor
@@ -144,15 +162,17 @@ Conexión con query param `user_id`:
 
 ```json
 {
-  "to": "456_o_grupo_1",
+  "to": "456_o_group_id",
   "message": "Hola",
   "sender_id": "123",
   "timestamp": "2026-02-21T20:15:00Z",
-  "type": "text"
+  "type": "directo",
+  "message_type": "texto",
+  "url_archivo": null
 }
 ```
 
-`type` puede ser `text` o `image`.
+`type` puede ser `directo` o `grupal`. `message_type` puede ser `texto`, `imagen`, `archivo`, `audio`, `sistema`.
 
 ## 6) Evento para grupos
 
@@ -164,7 +184,18 @@ Enviar a `join_group`:
 }
 ```
 
-## 7) Conectar “desde cualquier lugar” (internet)
+## 7) Evento para marcar entregado
+
+Enviar a `mark_delivered`:
+
+```json
+{
+  "mensaje_id": "12345",
+  "user_id": "123"
+}
+```
+
+## 8) Conectar “desde cualquier lugar” (internet)
 
 Para acceso externo real necesitas exponer tu servidor:
 
@@ -184,7 +215,7 @@ ngrok http 5000
 
 ---
 
-## 8) Despliegue en producción con HTTPS
+## 9) Despliegue en producción con HTTPS
 
 ### ✅ Opción 1: Nginx como Proxy Inverso (RECOMENDADO)
 

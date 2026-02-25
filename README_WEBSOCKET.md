@@ -97,6 +97,13 @@ SSL_KEY_FILE=
 # Base de datos PostgreSQL
 # ⚠️ IMPORTANTE: Cambia estos valores con tus credenciales reales
 DATABASE_URL=postgresql://postgres:tu_password_aqui@localhost:5432/upred_db
+
+# Alternativa: usar los mismos DB_* que tu API
+DB_HOST=localhost
+DB_PORT=5432
+DB_USER=postgres
+DB_PASSWORD=tu_password_aqui
+DB_NAME=upred_db
 ```
 
 **Formato de DATABASE_URL:**
@@ -108,6 +115,8 @@ postgresql://[usuario]:[contraseña]@[host]:[puerto]/[nombre_bd]
 ```
 DATABASE_URL=postgresql://postgres:mipassword123@localhost:5432/upred_db
 ```
+
+Si ya tienes tu API configurada, usa los mismos valores de `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD` y `DB_NAME`. El WebSocket primero usa `DATABASE_URL`; si no existe, construye la URL con los `DB_*`.
 
 ---
 
