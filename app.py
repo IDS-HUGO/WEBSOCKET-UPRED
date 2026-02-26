@@ -297,6 +297,45 @@ def get_group_members(group_id):
         return []
 
 
+def get_user_info(user_id):
+    """Obtiene nombre, apellido y correo de un usuario"""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT 
+                    id,
+                    nombre,
+                    apellido_paterno,
+                    apellido_materno,
+                    correo_institucional
+                FROM usuarios
+                WHERE id = %s
+            """, (int(user_id),))
+            
+            usuario = cursor.fetchone()
+            if usuario:
+                # Construir nombre completo
+                nombre_completo = f"{usuario['nombre']} {usuario['apellido_paterno']}"
+                if usuario['apellido_materno']:
+                    nombre_completo += f" {usuario['apellido_materno']}"
+                
+                return {
+                    "id": usuario["id"],
+                    "nombre_completo": nombre_completo,
+                    "correo": usuario["correo_institucional"],
+                    "nombre": usuario["nombre"],
+                    "apellido_paterno": usuario["apellido_paterno"],
+                    "apellido_materno": usuario["apellido_materno"]
+                }
+            return None
+            
+    except Exception as e:
+        print(f"[DB-ERROR] get_user_info: {e}")
+        return None
+
+
 def verify_user_in_group(user_id, group_id):
     """Verifica si un usuario es miembro activo de un grupo"""
     try:
@@ -691,9 +730,16 @@ def on_send_message(data):
             })
             return
     
+    # Obtener datos del remitente para incluir en el mensaje
+    sender_info = get_user_info(sender_id)
+    sender_name = sender_info["nombre_completo"] if sender_info else "Usuario Desconocido"
+    sender_email = sender_info["correo"] if sender_info else "desconocido@upred.mx"
+    
     # Preparar datos para emitir
     message_data = {
         "from": sender_id,
+        "sender_name": sender_name,
+        "sender_email": sender_email,
         "message": message_content,
         "type": chat_type,
         "message_type": message_type,
@@ -712,7 +758,7 @@ def on_send_message(data):
     # Emitir mensaje a la room (todos los conectados en esa sala)
     emit("receive_message", message_data, room=room_name)
 
-    print(f"[MESSAGE_SENT] mensaje_id={mensaje_guardado['id']} | room={room_name} | offline={not db_available}")
+    print(f"[MESSAGE_SENT] mensaje_id={mensaje_guardado['id']} | from={sender_name} | room={room_name} | offline={not db_available}")
 
     # Enviar confirmación al remitente
     status_msg = "Mensaje enviado y guardado en BD" if db_available else "Mensaje enviado (sin persistencia)"
@@ -804,6 +850,116 @@ def on_mark_read(data):
             })
         else:
             emit("error", {"message": "No se pudo marcar el mensaje como leído"})
+@socketio.on("load_message_history")
+def on_load_message_history(data):
+    """
+    Carga el historial de mensajes de una sala
+    
+    Formato esperado:
+    {
+        "sala_uuid": "uuid-de-la-sala",
+        "limit": 50  (opcional, default 50)
+    }
+    """
+    if not isinstance(data, dict):
+        emit("error", {"message": "Payload inválido para load_message_history"})
+        return
+    
+    sala_uuid = data.get("sala_uuid")
+    limit = min(int(data.get("limit", 50)), 200)  # Máximo 200 mensajes
+    
+    if not sala_uuid:
+        emit("error", {"message": "sala_uuid es requerido"})
+        return
+    
+    print(f"[LOAD_HISTORY] sala_uuid={sala_uuid} | limit={limit}")
+    
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Obtener sala_chat_id desde el UUID
+            cursor.execute("""
+                SELECT id FROM salas_chat
+                WHERE sala_uuid = %s
+            """, (sala_uuid,))
+            
+            sala = cursor.fetchone()
+            if not sala:
+                emit("error", {"message": "Sala no encontrada"})
+                return
+            
+            sala_chat_id = sala["id"]
+            
+            # Obtener mensajes más recientes (ordenados por antiguo a nuevo)
+            cursor.execute("""
+                SELECT 
+                    m.id,
+                    m.mensaje_uuid,
+                    m.sala_chat_id,
+                    m.remitente_id,
+                    m.tipo_mensaje,
+                    m.contenido,
+                    m.url_archivo,
+                    m.metadatos,
+                    m.enviado_en,
+                    u.nombre,
+                    u.apellido_paterno,
+                    u.apellido_materno,
+                    u.correo_institucional
+                FROM mensajes m
+                JOIN usuarios u ON m.remitente_id = u.id
+                WHERE m.sala_chat_id = %s
+                AND m.eliminado_en IS NULL
+                ORDER BY m.enviado_en DESC
+                LIMIT %s
+            """, (sala_chat_id, limit))
+            
+            mensajes = cursor.fetchall()
+            
+            # Invertir para enviar de antiguo a nuevo
+            mensajes_list = []
+            for msg in reversed(mensajes):
+                # Construir nombre completo del remitente
+                nombre_completo = f"{msg['nombre']} {msg['apellido_paterno']}"
+                if msg["apellido_materno"]:
+                    nombre_completo += f" {msg['apellido_materno']}"
+                
+                try:
+                    metadatos = json.loads(msg["metadatos"]) if msg["metadatos"] else {}
+                except:
+                    metadatos = {}
+                
+                mensaje_dict = {
+                    "id": str(msg["id"]),
+                    "mensaje_uuid": str(msg["mensaje_uuid"]),
+                    "sala_uuid": sala_uuid,
+                    "from": str(msg["remitente_id"]),
+                    "sender_name": nombre_completo,
+                    "sender_email": msg["correo_institucional"],
+                    "message": msg["contenido"],
+                    "type": metadatos.get("type", "directo"),
+                    "message_type": msg["tipo_mensaje"],
+                    "url_archivo": msg["url_archivo"],
+                    "timestamp": msg["enviado_en"].isoformat() if isinstance(msg["enviado_en"], datetime) else str(msg["enviado_en"]),
+                    "enviado_en": msg["enviado_en"].isoformat() if isinstance(msg["enviado_en"], datetime) else str(msg["enviado_en"])
+                }
+                mensajes_list.append(mensaje_dict)
+            
+            emit("message_history_loaded", {
+                "status": "ok",
+                "sala_uuid": sala_uuid,
+                "message_count": len(mensajes_list),
+                "messages": mensajes_list
+            })
+            
+            print(f"[HISTORY_SENT] {len(mensajes_list)} mensajes cargados")
+            
+    except Exception as e:
+        print(f"[ERROR] load_message_history: {e}")
+        emit("error", {"message": f"Error al cargar historial: {str(e)}"})
+
+
     except Exception as e:
         print(f"[ERROR] mark_read: {e}")
         emit("error", {"message": "Error al marcar mensaje como leído"})
