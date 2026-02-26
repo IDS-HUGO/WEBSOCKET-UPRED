@@ -850,6 +850,11 @@ def on_mark_read(data):
             })
         else:
             emit("error", {"message": "No se pudo marcar el mensaje como leído"})
+    except Exception as e:
+        print(f"[ERROR] mark_read: {e}")
+        emit("error", {"message": "Error al marcar mensaje como leído"})
+
+
 @socketio.on("load_message_history")
 def on_load_message_history(data):
     """
@@ -958,11 +963,6 @@ def on_load_message_history(data):
     except Exception as e:
         print(f"[ERROR] load_message_history: {e}")
         emit("error", {"message": f"Error al cargar historial: {str(e)}"})
-
-
-    except Exception as e:
-        print(f"[ERROR] mark_read: {e}")
-        emit("error", {"message": "Error al marcar mensaje como leído"})
 
 
 if __name__ == "__main__":
