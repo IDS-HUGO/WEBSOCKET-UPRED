@@ -5,10 +5,12 @@ import uuid as uuid_pkg
 import json
 
 from dotenv import load_dotenv
-from flask import Flask, request
+from flask import Flask, request, jsonify
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_cors import CORS
 import pymysql
+import cloudinary
+import cloudinary.uploader
 
 app = Flask(__name__)
 
@@ -30,6 +32,14 @@ DB_PORT = int(os.getenv("DB_PORT", "3306"))
 DB_USER = os.getenv("DB_USER", "root")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "")
 DB_NAME = os.getenv("DB_NAME", "upred_db")
+
+# Cloudinary
+cloudinary.config(
+    cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME", ""),
+    api_key=os.getenv("CLOUDINARY_API_KEY", ""),
+    api_secret=os.getenv("CLOUDINARY_API_SECRET", ""),
+    secure=True,
+)
 
 # CORS para REST endpoints
 CORS(app, origins=CORS_ORIGINS if CORS_ORIGINS != "*" else "*", supports_credentials=True)
@@ -374,6 +384,32 @@ def health_check():
     }, 200
 
 
+@app.route("/upload/image", methods=["POST"])
+def upload_image():
+    """Sube imagen a Cloudinary y retorna la URL. Usar antes de enviar mensaje de tipo imagen."""
+    if "file" not in request.files:
+        return jsonify({"error": "Campo 'file' requerido"}), 400
+
+    file = request.files["file"]
+    if not file.content_type or not file.content_type.startswith("image/"):
+        return jsonify({"error": "Solo se permiten imágenes"}), 400
+
+    file_bytes = file.read()
+    if len(file_bytes) > 10 * 1024 * 1024:
+        return jsonify({"error": "La imagen no debe superar 10MB"}), 400
+
+    try:
+        public_id = f"chat/{uuid_pkg.uuid4()}"
+        result = cloudinary.uploader.upload(
+            file_bytes,
+            public_id=public_id,
+            resource_type="image",
+        )
+        return jsonify({"url": result["secure_url"]}), 200
+    except Exception as e:
+        return jsonify({"error": f"Error al subir imagen: {str(e)}"}), 500
+
+
 @socketio.on("connect")
 def on_connect(auth=None):
     """Maneja nuevas conexiones de usuarios"""
@@ -602,6 +638,76 @@ def on_leave_group(data):
     )
 
 
+@socketio.on("send_direct_message")
+def on_send_direct_message(data):
+    """Compatibilidad con clientes que usan send_direct_message"""
+    if not isinstance(data, dict):
+        emit("error", {"message": "Payload inválido"})
+        return
+
+    sender_id = data.get("sender_id")
+    recipient_id = data.get("recipient_id")
+    content = data.get("content")
+    file_url = data.get("file_url")
+    message_type = data.get("type", "texto")
+    timestamp = data.get("timestamp") or datetime.utcnow().isoformat()
+
+    if not sender_id or not recipient_id:
+        emit("error", {"message": "sender_id y recipient_id son requeridos"})
+        return
+
+    if not content and not file_url:
+        emit("error", {"message": "content o file_url es requerido"})
+        return
+
+    payload = {
+        "to": str(recipient_id),
+        "message": content,
+        "sender_id": str(sender_id),
+        "timestamp": timestamp,
+        "type": "directo",
+        "message_type": message_type,
+        "url_archivo": file_url
+    }
+
+    on_send_message(payload)
+
+
+@socketio.on("send_group_message")
+def on_send_group_message(data):
+    """Compatibilidad con clientes que usan send_group_message"""
+    if not isinstance(data, dict):
+        emit("error", {"message": "Payload inválido"})
+        return
+
+    sender_id = data.get("sender_id")
+    group_id = data.get("group_id")
+    content = data.get("content")
+    file_url = data.get("file_url")
+    message_type = data.get("type", "texto")
+    timestamp = data.get("timestamp") or datetime.utcnow().isoformat()
+
+    if not sender_id or not group_id:
+        emit("error", {"message": "sender_id y group_id son requeridos"})
+        return
+
+    if not content and not file_url:
+        emit("error", {"message": "content o file_url es requerido"})
+        return
+
+    payload = {
+        "to": str(group_id),
+        "message": content,
+        "sender_id": str(sender_id),
+        "timestamp": timestamp,
+        "type": "grupal",
+        "message_type": message_type,
+        "url_archivo": file_url
+    }
+
+    on_send_message(payload)
+
+
 @socketio.on("send_message")
 def on_send_message(data):
     """
@@ -618,31 +724,28 @@ def on_send_message(data):
         "url_archivo": "https://..." (opcional)
     }
     """
-    required_fields = ["sala_uuid", "message", "sender_id", "timestamp", "type"]
-
     if not isinstance(data, dict):
         emit("ack", {"status": "error", "message": "Payload inválido"})
         return
 
-    missing = [field for field in required_fields if field not in data]
+    missing = [field for field in ["message", "sender_id", "timestamp", "type"] if field not in data]
     if missing:
-        emit(
-            "ack",
-            {
-                "status": "error",
-                "message": f"Faltan campos: {', '.join(missing)}",
-            },
-        )
+        emit("ack", {"status": "error", "message": f"Faltan campos: {', '.join(missing)}"})
         return
 
     # Normalizar datos
-    sala_uuid = str(data["sala_uuid"])
+    sala_uuid = data.get("sala_uuid")
+    to_value = data.get("to")
     sender_id = str(data["sender_id"])
     chat_type = str(data["type"]).lower()
     message_type = str(data.get("message_type", "texto")).lower()
     message_content = data["message"]
     url_archivo = data.get("url_archivo")
     timestamp = data["timestamp"]
+
+    if not sala_uuid and not to_value:
+        emit("ack", {"status": "error", "message": "sala_uuid o to es requerido"})
+        return
 
     # Validar tipo de mensaje
     valid_message_types = ["texto", "imagen", "archivo", "audio", "sistema"]
@@ -669,6 +772,24 @@ def on_send_message(data):
         f"message_type={message_type} "
         f"timestamp={timestamp}"
     )
+
+    # Resolver sala_uuid si viene el campo legacy 'to'
+    if not sala_uuid and to_value:
+        if chat_type == "directo":
+            sala = get_or_create_direct_chat(sender_id, to_value)
+        elif chat_type == "grupal":
+            sala = get_or_create_group_chat(to_value)
+        else:
+            emit("ack", {"status": "error", "message": "type debe ser 'directo' o 'grupal'"})
+            return
+
+        if not sala:
+            emit("ack", {"status": "error", "message": "No se pudo obtener sala"})
+            return
+
+        sala_uuid = sala["sala_uuid"]
+
+    sala_uuid = str(sala_uuid)
 
     # Intentar guardar en base de datos (fallback si falla)
     mensaje_guardado = None
