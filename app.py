@@ -9,40 +9,33 @@ from flask import Flask, request, jsonify
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_cors import CORS
 import pymysql
-import cloudinary
-import cloudinary.uploader
+from config import load_settings
+from services import upload_chat_image
 
 app = Flask(__name__)
 
 # Cargar variables desde .env si existe
 load_dotenv()
+settings = load_settings()
 
 # Configuración desde variables de entorno
-app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "super-secret-key-change-me-in-production")
-FLASK_ENV = os.getenv("FLASK_ENV", "development")
-CORS_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "*")
-HOST = os.getenv("HOST", "0.0.0.0")
-PORT = int(os.getenv("PORT", 5000))
-SSL_CERT = os.getenv("SSL_CERT_FILE", "")
-SSL_KEY = os.getenv("SSL_KEY_FILE", "")
+app.config["SECRET_KEY"] = settings.secret_key
+FLASK_ENV = settings.flask_env
+CORS_ORIGINS = settings.cors_origins
+HOST = settings.host
+PORT = settings.port
+SSL_CERT = settings.ssl_cert_file
+SSL_KEY = settings.ssl_key_file
 
 # Configuración de MySQL (misma que la API)
-DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_PORT = int(os.getenv("DB_PORT", "3306"))
-DB_USER = os.getenv("DB_USER", "root")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "")
-DB_NAME = os.getenv("DB_NAME", "upred_db")
-
-# Cloudinary
-cloudinary.config(
-    cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME", ""),
-    api_key=os.getenv("CLOUDINARY_API_KEY", ""),
-    api_secret=os.getenv("CLOUDINARY_API_SECRET", ""),
-    secure=True,
-)
+DB_HOST = settings.db_host
+DB_PORT = settings.db_port
+DB_USER = settings.db_user
+DB_PASSWORD = settings.db_password
+DB_NAME = settings.db_name
 
 # CORS para REST endpoints
-CORS(app, origins=CORS_ORIGINS if CORS_ORIGINS != "*" else "*", supports_credentials=True)
+CORS(app, origins=CORS_ORIGINS, supports_credentials=True)
 
 # SocketIO con CORS configurable
 socketio = SocketIO(
@@ -399,13 +392,10 @@ def upload_image():
         return jsonify({"error": "La imagen no debe superar 10MB"}), 400
 
     try:
-        public_id = f"chat/{uuid_pkg.uuid4()}"
-        result = cloudinary.uploader.upload(
-            file_bytes,
-            public_id=public_id,
-            resource_type="image",
-        )
-        return jsonify({"url": result["secure_url"]}), 200
+        url = upload_chat_image(file_bytes)
+        return jsonify({"url": url}), 200
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 500
     except Exception as e:
         return jsonify({"error": f"Error al subir imagen: {str(e)}"}), 500
 
@@ -878,6 +868,16 @@ def on_send_message(data):
     
     # Emitir mensaje a la room (todos los conectados en esa sala)
     emit("receive_message", message_data, room=room_name)
+
+    # Garantizar entrega en chat individual al room personal del receptor
+    if chat_type == "directo" and db_available and sala_info:
+        recipient_id = None
+        usuario_a_id = str(sala_info.get("usuario_a_id")) if sala_info.get("usuario_a_id") is not None else None
+        usuario_b_id = str(sala_info.get("usuario_b_id")) if sala_info.get("usuario_b_id") is not None else None
+        if usuario_a_id and usuario_b_id:
+            recipient_id = usuario_b_id if sender_id == usuario_a_id else usuario_a_id
+        if recipient_id:
+            emit("receive_message", message_data, room=recipient_id)
 
     print(f"[MESSAGE_SENT] mensaje_id={mensaje_guardado['id']} | from={sender_name} | room={room_name} | offline={not db_available}")
 
