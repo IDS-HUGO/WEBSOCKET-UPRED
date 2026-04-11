@@ -41,7 +41,7 @@ CORS(app, origins=CORS_ORIGINS, supports_credentials=True)
 socketio = SocketIO(
     app,
     cors_allowed_origins=CORS_ORIGINS,
-    async_mode="eventlet",
+    async_mode="threading",
     logger=FLASK_ENV == "development",
     engineio_logger=FLASK_ENV == "development",
 )
